@@ -102,15 +102,15 @@ def send_welcome(message):
   total_available = DAILY_LIMIT + user_data["bonus"] - user_data["count"]
 
   welcome_text = (
-      f"👋 Привет! Я бот-комбайн для работы с видео, фото и ссылками.\n\n"
-      f"🛠 **Выбери режим работы:**\n"
+      f"👋 Привет! Я быстрый бот-комбайн для работы с контентом.\n\n"
+      f"🛠 **Режимы работы:**\n"
       f"🎬 Уникализация видео/фото\n"
       f"🔵 Видео в кружочек\n"
       f"🎵 Извлечь аудио (MP3)\n"
       f"💧 Добавить водяной знак\n\n"
-      f"📥 **Или просто присылай ссылку** (TikTok, YouTube, Pinterest) — скачаю моментально!\n\n"
+      f"📥 **Или присылай ссылку** (TikTok, YouTube, Pinterest) — скачаю моментально!\n\n"
       f"🎁 Попыток сегодня: **{max(0, total_available)}**\n"
-      f"🎟 Активировать промокод: `/promo КОД`\n\n"
+      f"🎟 Промокод: `/promo КОД`\n\n"
       f"🔗 Реферальная ссылка: `{ref_link}`"
   )
 
@@ -202,7 +202,8 @@ def callback_handler(call):
     bot.answer_callback_query(call.id, "✅ Пресет сохранен!")
     if user_id in USER_PENDING_MEDIA:
       media_message = USER_PENDING_MEDIA.pop(user_id)
-      process_video_uniq(media_message)
+      # Запускаем уникализацию в фоновом потоке
+      Thread(target=process_video_uniq, args=(media_message,)).start()
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
 def checkout(pre_checkout_query):
@@ -216,7 +217,7 @@ def got_payment(message):
     user_data["bonus"] += 10
     bot.reply_to(message, "✅ Оплата прошла успешно! Вам зачислено +10 попыток.")
 
-# --- СКАЧИВАНИЕ ПО ССЫЛКАМ (БЕЗ FFmpeg, работает быстро) ---
+# --- СКАЧИВАНИЕ ПО ССЫЛКАМ В ФОНОВОМ ПОТОКЕ ---
 @bot.message_handler(func=lambda message: message.text and ("http://" in message.text or "https://" in message.text))
 def handle_url_input(message):
   user_id = message.from_user.id
@@ -229,21 +230,24 @@ def handle_url_input(message):
 
   url = message.text.strip()
   user_data["count"] += 1
-  msg = bot.reply_to(message, "📥 Быстро скачиваю видео по ссылке...")
+  
+  # Сразу отвечаем пользователю, не дожидаясь скачивания
+  msg = bot.reply_to(message, "📥 Задача принята! Скачиваю видео...")
+  Thread(target=download_url_worker, args=(message, url, msg.id)).start()
 
+def download_url_worker(message, url, msg_id):
+  user_id = message.from_user.id
+  output_path = f"downloaded_{user_id}_{random.randint(1000, 9999)}.mp4"
   try:
-    output_path = f"downloaded_{user_id}.mp4"
     ydl_opts = {
         'outtmpl': output_path,
         'format': 'mp4/best',
         'noplaylist': True,
     }
-    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
       ydl.download([url])
 
-    bot.edit_message_text("📤 Отправляю файл...", message.chat.id, msg.message_id)
-    
+    bot.edit_message_text("📤 Отправляю файл...", message.chat.id, msg_id)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
 
@@ -252,11 +256,10 @@ def handle_url_input(message):
 
     if os.path.exists(output_path):
       os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.message_id)
-
+    bot.delete_message(message.chat.id, msg_id)
   except Exception as e:
     print(f"Download error: {e}")
-    bot.reply_to(message, f"❌ Ошибка скачивания ссылки: {e}")
+    bot.edit_message_text(f"❌ Ошибка скачивания ссылки: {e}", message.chat.id, msg_id)
 
 @bot.message_handler(content_types=["video", "document"])
 def handle_video_input(message):
@@ -277,12 +280,13 @@ def handle_video_input(message):
 
   mode = USER_MODES.get(user_id, "uniq")
 
+  # Запускаем соответствующую задачу в фоновом потоке
   if mode == "circle":
-    process_video_circle(message)
+    Thread(target=process_video_circle, args=(message,)).start()
   elif mode == "audio":
-    process_extract_audio(message)
+    Thread(target=process_extract_audio, args=(message,)).start()
   elif mode == "watermark":
-    process_watermark(message)
+    Thread(target=process_watermark, args=(message,)).start()
   else:
     USER_PRESETS[user_id] = message
     markup = InlineKeyboardMarkup()
@@ -301,14 +305,18 @@ def handle_photo_input(message):
     return
 
   user_data["count"] += 1
-  msg = bot.reply_to(message, "📥 Обрабатываю изображение...")
+  msg = bot.reply_to(message, "📥 Обрабатываю изображение в фоне...")
+  Thread(target=process_photo_worker, args=(message, msg.id)).start()
+
+def process_photo_worker(message, msg_id):
+  user_id = message.from_user.id
+  rnd = random.randint(1000, 9999)
+  input_path = f"source_img_{user_id}_{rnd}.jpg"
+  output_path = f"uniq_img_{user_id}_{rnd}.jpg"
 
   try:
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-    
-    input_path = "source_img.jpg"
-    output_path = "uniq_img.jpg"
     
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
@@ -317,41 +325,36 @@ def handle_photo_input(message):
     width, height = img.size
     img = img.resize((width + random.choice([-1, 1]), height + random.choice([-1, 1])), Image.Resampling.LANCZOS)
     
-    enhancer_bright = ImageEnhance.Brightness(img)
-    img = enhancer_bright.enhance(random.uniform(0.98, 1.02))
-    
-    enhancer_contrast = ImageEnhance.Contrast(img)
-    img = enhancer_contrast.enhance(random.uniform(0.98, 1.02))
-    
-    img.save(output_path, "JPEG", quality=random.randint(92, 98))
+    ImageEnhance.Brightness(img).enhance(random.uniform(0.98, 1.02))
+    ImageEnhance.Contrast(img).enhance(random.uniform(0.98, 1.02)).save(output_path, "JPEG", quality=random.randint(92, 98))
 
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Создать ИИ-контент", url=MAIN_BOT_URL))
+    markup.add(InlineKeyboardButton("🚀 Создать ИИ-бот", url=MAIN_BOT_URL))
 
     with open(output_path, "rb") as photo:
       bot.send_photo(message.chat.id, photo, caption="🖼 Картинка уникализирована!", reply_markup=markup)
 
-    os.remove(input_path)
-    os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.message_id)
+    if os.path.exists(input_path): os.remove(input_path)
+    if os.path.exists(output_path): os.remove(output_path)
+    bot.delete_message(message.chat.id, msg_id)
 
   except Exception as e:
     print(f"Photo error: {e}")
-    bot.reply_to(message, f"❌ Ошибка обработки фото: {e}")
+    bot.edit_message_text(f"❌ Ошибка обработки фото: {e}", message.chat.id, msg_id)
 
 def process_video_circle(message):
   user_id = message.from_user.id
   user_data = get_user_data(user_id)
   user_data["count"] += 1
 
-  msg = bot.reply_to(message, "🔵 Конвертирую видео в кружочек...")
+  msg = bot.reply_to(message, "🔵 Принято! Конвертирую видео в кружочек...")
+  rnd = random.randint(1000, 9999)
+  input_path = f"source_circle_{user_id}_{rnd}.mp4"
+  output_path = f"result_circle_{user_id}_{rnd}.mp4"
 
   try:
     file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-
-    input_path = "source_circle.mp4"
-    output_path = "result_circle.mp4"
 
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
@@ -364,16 +367,16 @@ def process_video_circle(message):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю кружочек...", message.chat.id, msg.message_id)
+    bot.edit_message_text("📤 Отправляю кружочек...", message.chat.id, msg.id + 1)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
 
     with open(output_path, "rb") as vid:
       bot.send_video_note(message.chat.id, vid, reply_markup=markup, timeout=120)
 
-    os.remove(input_path)
-    os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.message_id)
+    if os.path.exists(input_path): os.remove(input_path)
+    if os.path.exists(output_path): os.remove(output_path)
+    bot.delete_message(message.chat.id, msg.id + 1)
   except Exception as e:
     print(f"Circle error: {e}")
 
@@ -382,14 +385,14 @@ def process_extract_audio(message):
   user_data = get_user_data(user_id)
   user_data["count"] += 1
 
-  msg = bot.reply_to(message, "🎵 Извлекаю аудио...")
+  msg = bot.reply_to(message, "🎵 Принято! Извлекаю аудио...")
+  rnd = random.randint(1000, 9999)
+  input_path = f"source_audio_{user_id}_{rnd}.mp4"
+  output_path = f"result_audio_{user_id}_{rnd}.mp3"
 
   try:
     file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-
-    input_path = "source_audio.mp4"
-    output_path = "result_audio.mp3"
 
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
@@ -397,16 +400,16 @@ def process_extract_audio(message):
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame", "-ab", "192k", output_path]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю MP3...", message.chat.id, msg.message_id)
+    bot.edit_message_text("📤 Отправляю MP3...", message.chat.id, msg.id + 1)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
 
     with open(output_path, "rb") as aud:
       bot.send_audio(message.chat.id, aud, caption="🎵 Аудиодорожка извлечена!", reply_markup=markup, timeout=120)
 
-    os.remove(input_path)
-    os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.message_id)
+    if os.path.exists(input_path): os.remove(input_path)
+    if os.path.exists(output_path): os.remove(output_path)
+    bot.delete_message(message.chat.id, msg.id + 1)
   except Exception as e:
     print(f"Audio error: {e}")
 
@@ -415,14 +418,14 @@ def process_watermark(message):
   user_data = get_user_data(user_id)
   user_data["count"] += 1
 
-  msg = bot.reply_to(message, "💧 Добавляю водяной знак...")
+  msg = bot.reply_to(message, "💧 Принято! Добавляю водяной знак...")
+  rnd = random.randint(1000, 9999)
+  input_path = f"source_wm_{user_id}_{rnd}.mp4"
+  output_path = f"result_wm_{user_id}_{rnd}.mp4"
 
   try:
     file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-
-    input_path = "source_wm.mp4"
-    output_path = "result_wm.mp4"
 
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
@@ -431,16 +434,16 @@ def process_watermark(message):
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", output_path]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю видео...", message.chat.id, msg.message_id)
+    bot.edit_message_text("📤 Отправляю видео...", message.chat.id, msg.id + 1)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
 
     with open(output_path, "rb") as vid:
       bot.send_video(message.chat.id, vid, caption="💧 Готово!", reply_markup=markup, timeout=120)
 
-    os.remove(input_path)
-    os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.message_id)
+    if os.path.exists(input_path): os.remove(input_path)
+    if os.path.exists(output_path): os.remove(output_path)
+    bot.delete_message(message.chat.id, msg.id + 1)
   except Exception as e:
     print(f"Watermark error: {e}")
 
@@ -452,19 +455,19 @@ def process_video_uniq(message):
   preset_key = USER_PRESETS.get(user_id, "preset_medium")
   preset = PRESETS.get(preset_key, PRESETS["preset_medium"])
 
-  msg = bot.reply_to(message, f"📥 Уникализирую видео ({preset['name']})...")
+  msg = bot.reply_to(message, f"📥 Принято! Уникализирую видео ({preset['name']})...")
+  rnd = random.randint(1000, 9999)
+  input_path = f"source_input_{user_id}_{rnd}.mp4"
+  output_dir = "bot_ready"
+  os.makedirs(output_dir, exist_ok=True)
+  out_file = os.path.join(output_dir, f"uniq_video_{user_id}_{rnd}.mp4")
 
   try:
     file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
     downloaded_file = bot.download_file(file_info.file_path)
 
-    input_path = "source_input.mp4"
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
-
-    output_dir = "bot_ready"
-    os.makedirs(output_dir, exist_ok=True)
-    out_file = os.path.join(output_dir, "uniq_video.mp4")
 
     speed = round(random.uniform(preset["speed_min"], preset["speed_max"]), 3)
     pts = round(1 / speed, 4)
@@ -482,7 +485,7 @@ def process_video_uniq(message):
     ]
 
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bot.edit_message_text("📤 Отправка файла...", message.chat.id, msg.message_id)
+    bot.edit_message_text("📤 Отправка файла...", message.chat.id, msg.id)
 
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
@@ -490,9 +493,9 @@ def process_video_uniq(message):
     with open(out_file, "rb") as vid:
       bot.send_video(message.chat.id, vid, caption="🎬 Уникальная копия готова!", reply_markup=markup, timeout=120)
 
-    os.remove(input_path)
-    os.remove(out_file)
-    bot.delete_message(message.chat.id, msg.message_id)
+    if os.path.exists(input_path): os.remove(input_path)
+    if os.path.exists(out_file): os.remove(out_file)
+    bot.delete_message(message.chat.id, msg.id)
   except Exception as e:
     print(f"Video error: {e}")
 
@@ -510,5 +513,5 @@ def fallback_handler(message):
 if __name__ == "__main__":
   t = Thread(target=run_web)
   t.start()
-  print("🤖 Бот успешно запущен!")
+  print("🤖 Оптимизированный многопоточный бот запущен!")
   bot.infinity_polling(skip_pending=True)
