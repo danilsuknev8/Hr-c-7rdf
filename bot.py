@@ -601,4 +601,3 @@ if __name__ == "__main__":
   t.start()
   print("🤖 Бот с системой промокодов успешно запущен!")
   bot.infinity_polling(skip_pending=True)
- 
