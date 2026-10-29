@@ -1,3 +1,6 @@
 pyTelegramBotAPI
 requests
 flask
+Pillow
+yt-dlp
+ 
