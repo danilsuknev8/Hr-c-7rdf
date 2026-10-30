@@ -30,6 +30,7 @@ ACTIVATED_PROMOS = {}
 
 USER_MODES = {}         
 USER_PRESETS = {}       
+USER_COUNTS = {}        
 USER_PENDING_MEDIA = {} 
 
 PRESETS = {
@@ -75,6 +76,41 @@ def get_user_data(user_id):
     }
   return USER_LIMITS[user_id]
 
+def send_main_menu(chat_id, user_id, text_prefix=""):
+  user_data = get_user_data(user_id)
+  total_available = DAILY_LIMIT + user_data["bonus"] - user_data["count"]
+  ref_link = f"https://t.me/{bot.get_me().username}?start=ref_{user_id}"
+
+  menu_text = (
+      f"{text_prefix}\n\n"
+      f"👋 Главное меню:\n"
+      f"🛠 **Выбери режим работы:**\n"
+      f"🎬 Уникализация видео/фото\n"
+      f"🔵 Видео в кружочек\n"
+      f"🎵 Извлечь аудио (MP3)\n"
+      f"💧 Добавить водяной знак\n\n"
+      f"📥 **Просто присылай видео или фото в чат!**\n\n"
+      f"🎁 Попыток сегодня: **{max(0, total_available)}**\n"
+      f"🎟 Промокод: `/promo КОД`\n"
+      f"🔗 Реферальная ссылка: `{ref_link}`"
+  )
+
+  markup = InlineKeyboardMarkup()
+  markup.add(
+      InlineKeyboardButton("🎬 Уникализировать", callback_data="mode_uniq"),
+      InlineKeyboardButton("🔵 В кружочек", callback_data="mode_circle"),
+  )
+  markup.add(
+      InlineKeyboardButton("🎵 Извлечь аудио", callback_data="mode_audio"),
+      InlineKeyboardButton("💧 Водяной знак", callback_data="mode_watermark"),
+  )
+  markup.add(
+      InlineKeyboardButton("⭐ Купить попытки (Stars)", callback_data="buy_stars")
+  )
+  markup.add(InlineKeyboardButton("🚀 Основной ИИ-бот", url=MAIN_BOT_URL))
+
+  bot.send_message(chat_id, menu_text, parse_mode="Markdown", reply_markup=markup)
+
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
   args = message.text.split()
@@ -96,38 +132,7 @@ def send_welcome(message):
     except Exception as e:
       print(f"Ref error: {e}")
 
-  ref_link = f"https://t.me/{bot.get_me().username}?start=ref_{user_id}"
-  user_data = get_user_data(user_id)
-  total_available = DAILY_LIMIT + user_data["bonus"] - user_data["count"]
-
-  welcome_text = (
-      f"👋 Привет! Я быстрый бот-комбайн для работы с видео и фото.\n\n"
-      f"🛠 **Режимы работы:**\n"
-      f"🎬 Уникализация видео/фото\n"
-      f"🔵 Видео в кружочек\n"
-      f"🎵 Извлечь аудио (MP3)\n"
-      f"💧 Добавить водяной знак\n\n"
-      f"📥 **Просто присылай видео или фото в чат!**\n\n"
-      f"🎁 Попыток сегодня: **{max(0, total_available)}**\n"
-      f"🎟 Промокод: `/promo КОД`\n\n"
-      f"🔗 Реферальная ссылка: `{ref_link}`"
-  )
-
-  markup = InlineKeyboardMarkup()
-  markup.add(
-      InlineKeyboardButton("🎬 Уникализировать", callback_data="mode_uniq"),
-      InlineKeyboardButton("🔵 В кружочек", callback_data="mode_circle"),
-  )
-  markup.add(
-      InlineKeyboardButton("🎵 Извлечь аудио", callback_data="mode_audio"),
-      InlineKeyboardButton("💧 Водяной знак", callback_data="mode_watermark"),
-  )
-  markup.add(
-      InlineKeyboardButton("⭐ Купить попытки (Stars)", callback_data="buy_stars")
-  )
-  markup.add(InlineKeyboardButton("🚀 Основной ИИ-бот", url=MAIN_BOT_URL))
-
-  bot.reply_to(message, welcome_text, parse_mode="Markdown", reply_markup=markup)
+  send_main_menu(message.chat.id, user_id, "👋 Привет! Я быстрый бот-комбайн для работы с видео и фото.")
 
 @bot.message_handler(commands=["promo"])
 def handle_promo_code(message):
@@ -185,7 +190,7 @@ def callback_handler(call):
     mode_names = {
         "uniq": "Уникализация видео/фото",
         "circle": "Видео в кружочек",
-        "audio": "Извлечение аудио (MP3)",
+        "audio": "Извлечь аудио (MP3)",
         "watermark": "Добавление водяного знака"
     }
     bot.answer_callback_query(call.id, f"Режим: {mode_names.get(mode, '')}")
@@ -199,9 +204,35 @@ def callback_handler(call):
   elif data.startswith("preset_"):
     USER_PRESETS[user_id] = data
     bot.answer_callback_query(call.id, "✅ Пресет сохранен!")
+    
+    markup = InlineKeyboardMarkup(row_width=5)
+    markup.add(
+        InlineKeyboardButton("1", callback_data="count_1"),
+        InlineKeyboardButton("2", callback_data="count_2"),
+        InlineKeyboardButton("3", callback_data="count_3"),
+        InlineKeyboardButton("4", callback_data="count_4"),
+        InlineKeyboardButton("5", callback_data="count_5"),
+    )
+    bot.edit_message_text(
+        "🔢 Выбери количество уникальных копий:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+  elif data.startswith("count_"):
+    count = int(data.split("_")[1])
+    USER_COUNTS[user_id] = count
+    bot.answer_callback_query(call.id, f"✅ Выбрано копий: {count}")
+    
     if user_id in USER_PENDING_MEDIA:
       media_message = USER_PENDING_MEDIA.pop(user_id)
-      Thread(target=process_video_uniq, args=(media_message,)).start()
+      mode = USER_MODES.get(user_id, "uniq")
+      
+      if mode == "uniq" and media_message.content_type == "photo":
+        Thread(target=process_photo_worker, args=(media_message, count)).start()
+      else:
+        Thread(target=process_video_uniq, args=(media_message, count)).start()
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
 def checkout(pre_checkout_query):
@@ -235,13 +266,16 @@ def handle_video_input(message):
   mode = USER_MODES.get(user_id, "uniq")
 
   if mode == "circle":
+    USER_COUNTS[user_id] = 1
     Thread(target=process_video_circle, args=(message,)).start()
   elif mode == "audio":
+    USER_COUNTS[user_id] = 1
     Thread(target=process_extract_audio, args=(message,)).start()
   elif mode == "watermark":
+    USER_COUNTS[user_id] = 1
     Thread(target=process_watermark, args=(message,)).start()
   else:
-    USER_PRESETS[user_id] = message
+    USER_PENDING_MEDIA[user_id] = message
     markup = InlineKeyboardMarkup()
     for key, val in PRESETS.items():
       markup.add(InlineKeyboardButton(val["name"], callback_data=key))
@@ -257,43 +291,63 @@ def handle_photo_input(message):
     bot.reply_to(message, "❌ Лимит попыток исчерпан. Используй /promo")
     return
 
-  user_data["count"] += 1
-  msg = bot.reply_to(message, "📥 Обрабатываю изображение в фоне...")
-  Thread(target=process_photo_worker, args=(message, msg.id)).start()
+  mode = USER_MODES.get(user_id, "uniq")
+  if mode == "uniq":
+    USER_PENDING_MEDIA[user_id] = message
+    markup = InlineKeyboardMarkup(row_width=5)
+    markup.add(
+        InlineKeyboardButton("1", callback_data="count_1"),
+        InlineKeyboardButton("2", callback_data="count_2"),
+        InlineKeyboardButton("3", callback_data="count_3"),
+        InlineKeyboardButton("4", callback_data="count_4"),
+        InlineKeyboardButton("5", callback_data="count_5"),
+    )
+    bot.reply_to(message, "🔢 Выбери количество уникальных копий для фото:", reply_markup=markup)
+  else:
+    USER_COUNTS[user_id] = 1
+    Thread(target=process_photo_worker, args=(message, 1)).start()
 
-def process_photo_worker(message, msg_id):
+def process_photo_worker(message, count):
   user_id = message.from_user.id
-  rnd = random.randint(1000, 9999)
-  input_path = f"source_img_{user_id}_{rnd}.jpg"
-  output_path = f"uniq_img_{user_id}_{rnd}.jpg"
+  user_data = get_user_data(user_id)
+  
+  # Списываем ровно 1 попытку за любую генерацию
+  user_data["count"] += 1
+  msg = bot.reply_to(message, f"📥 Создаю {count} уникальных копий фото...")
 
   try:
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     
+    rnd = random.randint(1000, 9999)
+    input_path = f"source_img_{user_id}_{rnd}.jpg"
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
 
-    img = Image.open(input_path)
-    width, height = img.size
-    img = img.resize((width + random.choice([-1, 1]), height + random.choice([-1, 1])), Image.Resampling.LANCZOS)
+    for i in range(count):
+      output_path = f"uniq_img_{user_id}_{rnd}_{i}.jpg"
+      img = Image.open(input_path)
+      width, height = img.size
+      img = img.resize((width + random.choice([-1, 1]), height + random.choice([-1, 1])), Image.Resampling.LANCZOS)
+      
+      ImageEnhance.Brightness(img).enhance(random.uniform(0.98, 1.02))
+      ImageEnhance.Contrast(img).enhance(random.uniform(0.98, 1.02)).save(output_path, "JPEG", quality=random.randint(92, 98))
+
+      with open(output_path, "rb") as photo:
+        bot.send_photo(message.chat.id, photo, caption=f"🖼 Копия №{i+1}")
+
+      if os.path.exists(output_path):
+        os.remove(output_path)
+
+    if os.path.exists(input_path):
+      os.remove(input_path)
     
-    ImageEnhance.Brightness(img).enhance(random.uniform(0.98, 1.02))
-    ImageEnhance.Contrast(img).enhance(random.uniform(0.98, 1.02)).save(output_path, "JPEG", quality=random.randint(92, 98))
-
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Создать ИИ-бот", url=MAIN_BOT_URL))
-
-    with open(output_path, "rb") as photo:
-      bot.send_photo(message.chat.id, photo, caption="🖼 Картинка уникализирована!", reply_markup=markup)
-
-    if os.path.exists(input_path): os.remove(input_path)
-    if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg_id)
+    bot.delete_message(message.chat.id, msg.id)
+    send_main_menu(message.chat.id, user_id, f"✅ Успешно создано {count} копий фото!")
 
   except Exception as e:
     print(f"Photo error: {e}")
-    bot.edit_message_text(f"❌ Ошибка обработки фото: {e}", message.chat.id, msg_id)
+    bot.edit_message_text(f"❌ Ошибка обработки фото: {e}", message.chat.id, msg.id)
 
 def process_video_circle(message):
   user_id = message.from_user.id
@@ -320,16 +374,14 @@ def process_video_circle(message):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю кружочек...", message.chat.id, msg.id + 1)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
-
     with open(output_path, "rb") as vid:
-      bot.send_video_note(message.chat.id, vid, reply_markup=markup, timeout=120)
+      bot.send_video_note(message.chat.id, vid, timeout=120)
 
     if os.path.exists(input_path): os.remove(input_path)
     if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.id + 1)
+    bot.delete_message(message.chat.id, msg.id)
+    
+    send_main_menu(message.chat.id, user_id, "✅ Видео успешно переведено в кружочек!")
   except Exception as e:
     print(f"Circle error: {e}")
 
@@ -353,16 +405,14 @@ def process_extract_audio(message):
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame", "-ab", "192k", output_path]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю MP3...", message.chat.id, msg.id + 1)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
-
     with open(output_path, "rb") as aud:
-      bot.send_audio(message.chat.id, aud, caption="🎵 Аудиодорожка извлечена!", reply_markup=markup, timeout=120)
+      bot.send_audio(message.chat.id, aud, caption="🎵 Аудиодорожка извлечена!", timeout=120)
 
     if os.path.exists(input_path): os.remove(input_path)
     if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.id + 1)
+    bot.delete_message(message.chat.id, msg.id)
+    
+    send_main_menu(message.chat.id, user_id, "✅ Аудио успешно извлечено!")
   except Exception as e:
     print(f"Audio error: {e}")
 
@@ -387,33 +437,32 @@ def process_watermark(message):
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", output_path]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    bot.edit_message_text("📤 Отправляю видео...", message.chat.id, msg.id + 1)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
-
     with open(output_path, "rb") as vid:
-      bot.send_video(message.chat.id, vid, caption="💧 Готово!", reply_markup=markup, timeout=120)
+      bot.send_video(message.chat.id, vid, caption="💧 Водяной знак добавлен!", timeout=120)
 
     if os.path.exists(input_path): os.remove(input_path)
     if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.id + 1)
+    bot.delete_message(message.chat.id, msg.id)
+    
+    send_main_menu(message.chat.id, user_id, "✅ Водяной знак успешно наложен!")
   except Exception as e:
     print(f"Watermark error: {e}")
 
-def process_video_uniq(message):
+def process_video_uniq(message, count):
   user_id = message.from_user.id
   user_data = get_user_data(user_id)
+  
+  # Списываем ровно 1 попытку независимо от выбранного количества копий
   user_data["count"] += 1
 
   preset_key = USER_PRESETS.get(user_id, "preset_medium")
   preset = PRESETS.get(preset_key, PRESETS["preset_medium"])
 
-  msg = bot.reply_to(message, f"📥 Принято! Уникализирую видео ({preset['name']})...")
+  msg = bot.reply_to(message, f"📥 Создаю {count} уникальных копий видео ({preset['name']})...")
   rnd = random.randint(1000, 9999)
   input_path = f"source_input_{user_id}_{rnd}.mp4"
   output_dir = "bot_ready"
   os.makedirs(output_dir, exist_ok=True)
-  out_file = os.path.join(output_dir, f"uniq_video_{user_id}_{rnd}.mp4")
 
   try:
     file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
@@ -422,49 +471,48 @@ def process_video_uniq(message):
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
 
-    speed = round(random.uniform(preset["speed_min"], preset["speed_max"]), 3)
-    pts = round(1 / speed, 4)
-    zoom = preset["zoom"]
-    noise = preset["noise"]
+    for i in range(count):
+      out_file = os.path.join(output_dir, f"uniq_video_{user_id}_{rnd}_{i}.mp4")
+      
+      speed = round(random.uniform(preset["speed_min"], preset["speed_max"]), 3)
+      pts = round(1 / speed, 4)
+      zoom = preset["zoom"]
+      noise = preset["noise"]
 
-    vf = f"setpts={pts}*PTS,scale=iw*{zoom}:ih*{zoom},crop=iw/{zoom}:ih/{zoom},noise=alls={noise}:allf=t"
+      vf = f"setpts={pts}*PTS,scale=iw*{zoom}:ih*{zoom},crop=iw/{zoom}:ih/{zoom},noise=alls={noise}:allf=t"
 
-    cmd = [
-        "ffmpeg", "-y", "-ss", "0.05", "-i", input_path,
-        "-map_metadata", "-1", "-metadata", "make=Apple", "-metadata", "model=iPhone 15 Pro",
-        "-vf", vf, "-af", f"atempo={speed}",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
-        "-c:a", "aac", "-b:a", "128k", out_file
-    ]
+      cmd = [
+          "ffmpeg", "-y", "-ss", str(round(random.uniform(0.01, 0.08), 2)), "-i", input_path,
+          "-map_metadata", "-1", "-metadata", "make=Apple", "-metadata", f"model=iPhone {random.choice(['14', '15', '16'])} Pro",
+          "-vf", vf, "-af", f"atempo={speed}",
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(random.randint(20, 23)),
+          "-c:a", "aac", "-b:a", "128k", out_file
+      ]
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bot.edit_message_text("📤 Отправка файла...", message.chat.id, msg.id)
+      subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
+      with open(out_file, "rb") as vid:
+        bot.send_video(message.chat.id, vid, caption=f"🎬 Уникальная копия №{i+1}", timeout=120)
 
-    with open(out_file, "rb") as vid:
-      bot.send_video(message.chat.id, vid, caption="🎬 Уникальная копия готова!", reply_markup=markup, timeout=120)
+      if os.path.exists(out_file):
+        os.remove(out_file)
 
-    if os.path.exists(input_path): os.remove(input_path)
-    if os.path.exists(out_file): os.remove(out_file)
+    if os.path.exists(input_path):
+      os.remove(input_path)
+      
     bot.delete_message(message.chat.id, msg.id)
+    send_main_menu(message.chat.id, user_id, f"✅ Успешно создано {count} копий видео!")
+
   except Exception as e:
     print(f"Video error: {e}")
+    bot.edit_message_text(f"❌ Ошибка видео: {e}", message.chat.id, msg.id)
 
 @bot.message_handler(func=lambda message: True)
 def fallback_handler(message):
-  markup = InlineKeyboardMarkup()
-  markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
-  bot.reply_to(
-      message,
-      "👋 Пришли видеофайл или фото для обработки.\n🎟 Промокод: `/promo КОД`",
-      reply_markup=markup,
-      parse_mode="Markdown"
-  )
+  send_main_menu(message.chat.id, message.from_user.id, "👋 Пришли видеофайл или фото для обработки.")
 
 if __name__ == "__main__":
   t = Thread(target=run_web)
   t.start()
-  print("🤖 Бот успешно запущен и работает стабильно!")
+  print("🤖 Бот успешно запущен!")
   bot.infinity_polling(skip_pending=True)
