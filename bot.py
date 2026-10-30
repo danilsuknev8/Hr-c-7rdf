@@ -11,7 +11,6 @@ from telebot.types import (
     InlineKeyboardMarkup,
     LabeledPrice,
 )
-import yt_dlp
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
@@ -102,13 +101,13 @@ def send_welcome(message):
   total_available = DAILY_LIMIT + user_data["bonus"] - user_data["count"]
 
   welcome_text = (
-      f"👋 Привет! Я быстрый бот-комбайн для работы с контентом.\n\n"
+      f"👋 Привет! Я быстрый бот-комбайн для работы с видео и фото.\n\n"
       f"🛠 **Режимы работы:**\n"
       f"🎬 Уникализация видео/фото\n"
       f"🔵 Видео в кружочек\n"
       f"🎵 Извлечь аудио (MP3)\n"
       f"💧 Добавить водяной знак\n\n"
-      f"📥 **Или присылай ссылку** (TikTok, YouTube, Pinterest) — скачаю моментально!\n\n"
+      f"📥 **Просто присылай видео или фото в чат!**\n\n"
       f"🎁 Попыток сегодня: **{max(0, total_available)}**\n"
       f"🎟 Промокод: `/promo КОД`\n\n"
       f"🔗 Реферальная ссылка: `{ref_link}`"
@@ -191,7 +190,7 @@ def callback_handler(call):
     }
     bot.answer_callback_query(call.id, f"Режим: {mode_names.get(mode, '')}")
     bot.edit_message_text(
-        f"✅ Выбран режим: **{mode_names.get(mode, '')}**.\nТеперь отправь мне файл или ссылку!",
+        f"✅ Выбран режим: **{mode_names.get(mode, '')}**.\nТеперь отправь мне файл!",
         call.message.chat.id,
         call.message.message_id,
         parse_mode="Markdown",
@@ -202,7 +201,6 @@ def callback_handler(call):
     bot.answer_callback_query(call.id, "✅ Пресет сохранен!")
     if user_id in USER_PENDING_MEDIA:
       media_message = USER_PENDING_MEDIA.pop(user_id)
-      # Запускаем уникализацию в фоновом потоке
       Thread(target=process_video_uniq, args=(media_message,)).start()
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
@@ -216,51 +214,6 @@ def got_payment(message):
     user_data = get_user_data(user_id)
     user_data["bonus"] += 10
     bot.reply_to(message, "✅ Оплата прошла успешно! Вам зачислено +10 попыток.")
-
-# --- СКАЧИВАНИЕ ПО ССЫЛКАМ В ФОНОВОМ ПОТОКЕ ---
-@bot.message_handler(func=lambda message: message.text and ("http://" in message.text or "https://" in message.text))
-def handle_url_input(message):
-  user_id = message.from_user.id
-  user_data = get_user_data(user_id)
-  total_available = DAILY_LIMIT + user_data["bonus"] - user_data["count"]
-
-  if total_available <= 0:
-    bot.reply_to(message, "❌ Лимит попыток исчерпан. Используй /promo или /start")
-    return
-
-  url = message.text.strip()
-  user_data["count"] += 1
-  
-  # Сразу отвечаем пользователю, не дожидаясь скачивания
-  msg = bot.reply_to(message, "📥 Задача принята! Скачиваю видео...")
-  Thread(target=download_url_worker, args=(message, url, msg.id)).start()
-
-def download_url_worker(message, url, msg_id):
-  user_id = message.from_user.id
-  output_path = f"downloaded_{user_id}_{random.randint(1000, 9999)}.mp4"
-  try:
-    ydl_opts = {
-        'outtmpl': output_path,
-        'format': 'mp4/best',
-        'noplaylist': True,
-        'impersonate': 'chrome',  # Эмуляция браузера Chrome для обхода защиты TikTok
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-      ydl.download([url])
-
-    bot.edit_message_text("📤 Отправляю файл...", message.chat.id, msg_id)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
-
-    with open(output_path, "rb") as vid:
-      bot.send_video(message.chat.id, vid, caption="🎬 Видео скачано!", reply_markup=markup, timeout=120)
-
-    if os.path.exists(output_path):
-      os.remove(output_path)
-    bot.delete_message(message.chat.id, msg_id)
-  except Exception as e:
-    print(f"Download error: {e}")
-    bot.edit_message_text(f"❌ Ошибка скачивания ссылки: {e}", message.chat.id, msg_id)
 
 @bot.message_handler(content_types=["video", "document"])
 def handle_video_input(message):
@@ -281,7 +234,6 @@ def handle_video_input(message):
 
   mode = USER_MODES.get(user_id, "uniq")
 
-  # Запускаем соответствующую задачу в фоновом потоке
   if mode == "circle":
     Thread(target=process_video_circle, args=(message,)).start()
   elif mode == "audio":
@@ -506,7 +458,7 @@ def fallback_handler(message):
   markup.add(InlineKeyboardButton("🚀 Запустить ИИ-бот", url=MAIN_BOT_URL))
   bot.reply_to(
       message,
-      "👋 Пришли ссылку на видео (TikTok, YouTube, Pinterest) или видеофайл для обработки.\n🎟 Промокод: `/promo КОД`",
+      "👋 Пришли видеофайл или фото для обработки.\n🎟 Промокод: `/promo КОД`",
       reply_markup=markup,
       parse_mode="Markdown"
   )
@@ -514,5 +466,5 @@ def fallback_handler(message):
 if __name__ == "__main__":
   t = Thread(target=run_web)
   t.start()
-  print("🤖 Оптимизированный многопоточный бот запущен!")
+  print("🤖 Бот успешно запущен и работает стабильно!")
   bot.infinity_polling(skip_pending=True)
