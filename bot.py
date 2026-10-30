@@ -15,6 +15,11 @@ from telebot.types import (
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
+# --- НАСТРОЙКИ АДМИНА ---
+# Укажи здесь свой Telegram ID (целое число), чтобы получить доступ к админ-панели
+ADMIN_ID = 123456789  # <--- ЗАМЕНИ НА СВОЙ REAL ID
+# ------------------------
+
 USER_LIMITS = {}
 DAILY_LIMIT = 3
 MAIN_BOT_URL = "https://t.me/Naketrue_bot"
@@ -32,6 +37,7 @@ USER_MODES = {}
 USER_PRESETS = {}       
 USER_COUNTS = {}        
 USER_PENDING_MEDIA = {} 
+USER_WATERMARKS = {}    
 
 PRESETS = {
     "preset_light": {
@@ -86,8 +92,6 @@ def send_main_menu(chat_id, user_id, text_prefix=""):
       f"👋 Главное меню:\n"
       f"🛠 **Выбери режим работы:**\n"
       f"🎬 Уникализация видео/фото\n"
-      f"🔵 Видео в кружочек\n"
-      f"🎵 Извлечь аудио (MP3)\n"
       f"💧 Добавить водяной знак\n\n"
       f"📥 **Просто присылай видео или фото в чат!**\n\n"
       f"🎁 Попыток сегодня: **{max(0, total_available)}**\n"
@@ -98,16 +102,16 @@ def send_main_menu(chat_id, user_id, text_prefix=""):
   markup = InlineKeyboardMarkup()
   markup.add(
       InlineKeyboardButton("🎬 Уникализировать", callback_data="mode_uniq"),
-      InlineKeyboardButton("🔵 В кружочек", callback_data="mode_circle"),
-  )
-  markup.add(
-      InlineKeyboardButton("🎵 Извлечь аудио", callback_data="mode_audio"),
       InlineKeyboardButton("💧 Водяной знак", callback_data="mode_watermark"),
   )
   markup.add(
       InlineKeyboardButton("⭐ Купить попытки (Stars)", callback_data="buy_stars")
   )
   markup.add(InlineKeyboardButton("🚀 Основной ИИ-бот", url=MAIN_BOT_URL))
+
+  # Если пользователь — админ, добавляем кнопку админ-панели
+  if user_id == ADMIN_ID:
+    markup.add(InlineKeyboardButton("👑 Админ-панель", callback_data="admin_panel"))
 
   bot.send_message(chat_id, menu_text, parse_mode="Markdown", reply_markup=markup)
 
@@ -133,6 +137,28 @@ def send_welcome(message):
       print(f"Ref error: {e}")
 
   send_main_menu(message.chat.id, user_id, "👋 Привет! Я быстрый бот-комбайн для работы с видео и фото.")
+
+@bot.message_handler(commands=["admin"])
+def admin_command(message):
+  if message.from_user.id != ADMIN_ID:
+    return
+
+  total_users = len(USER_LIMITS)
+  active_today = sum(1 for uid, data in USER_LIMITS.items() if data["date"] == date.today())
+  
+  admin_text = (
+      f"👑 **Панель администратора**\n\n"
+      f"👥 Всего пользователей в памяти: `{total_users}`\n"
+      f"🟢 Активных сегодня: `{active_today}`\n"
+      f"📦 Активных промокодов: `{len(PROMO_CODES)}`\n\n"
+      f"Используй кнопки ниже для управления:"
+  )
+
+  markup = InlineKeyboardMarkup()
+  markup.add(InlineKeyboardButton("📊 Обновить статистику", callback_data="admin_panel"))
+  markup.add(InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_menu"))
+
+  bot.reply_to(message, admin_text, parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(commands=["promo"])
 def handle_promo_code(message):
@@ -184,22 +210,59 @@ def callback_handler(call):
     )
     bot.answer_callback_query(call.id)
 
+  elif data == "admin_panel":
+    if user_id != ADMIN_ID:
+      bot.answer_callback_query(call.id, "❌ Доступ запрещен!", show_alert=True)
+      return
+
+    total_users = len(USER_LIMITS)
+    active_today = sum(1 for uid, d in USER_LIMITS.items() if d["date"] == date.today())
+    
+    admin_text = (
+        f"👑 **Панель администратора**\n\n"
+        f"👥 Всего пользователей в памяти: `{total_users}`\n"
+        f"🟢 Активных сегодня: `{active_today}`\n"
+        f"📦 Активных промокодов: `{len(PROMO_CODES)}`"
+    )
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📊 Обновить", callback_data="admin_panel"))
+    markup.add(InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_menu"))
+    
+    try:
+      bot.edit_message_text(admin_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+    except:
+      pass
+    bot.answer_callback_query(call.id)
+
+  elif data == "back_to_menu":
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    send_main_menu(call.message.chat.id, user_id, "👋 Главное меню:")
+    bot.answer_callback_query(call.id)
+
   elif data.startswith("mode_"):
     mode = data.split("_")[1]
     USER_MODES[user_id] = mode
     mode_names = {
         "uniq": "Уникализация видео/фото",
-        "circle": "Видео в кружочек",
-        "audio": "Извлечь аудио (MP3)",
         "watermark": "Добавление водяного знака"
     }
     bot.answer_callback_query(call.id, f"Режим: {mode_names.get(mode, '')}")
-    bot.edit_message_text(
-        f"✅ Выбран режим: **{mode_names.get(mode, '')}**.\nТеперь отправь мне файл!",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="Markdown",
-    )
+    
+    if mode == "watermark":
+      bot.edit_message_text(
+          "💧 Выбран режим: **Добавление водяного знака**.\n\n"
+          "✍️ Напиши текст, который нужно разместить на видео:",
+          call.message.chat.id,
+          call.message.message_id,
+          parse_mode="Markdown",
+      )
+    else:
+      bot.edit_message_text(
+          f"✅ Выбран режим: **{mode_names.get(mode, '')}**.\nТеперь отправь мне файл!",
+          call.message.chat.id,
+          call.message.message_id,
+          parse_mode="Markdown",
+      )
 
   elif data.startswith("preset_"):
     USER_PRESETS[user_id] = data
@@ -246,6 +309,22 @@ def got_payment(message):
     user_data["bonus"] += 10
     bot.reply_to(message, "✅ Оплата прошла успешно! Вам зачислено +10 попыток.")
 
+@bot.message_handler(func=lambda message: message.text and not message.text.startswith("/"))
+def handle_text_input(message):
+  user_id = message.from_user.id
+  mode = USER_MODES.get(user_id, "uniq")
+
+  if mode == "watermark":
+    custom_text = message.text.strip()
+    USER_WATERMARKS[user_id] = custom_text
+    bot.reply_to(
+        message, 
+        f"✅ Текст водяного знака сохранен: «`{custom_text}`»\n\n📥 Теперь отправь мне видеофайл для наложения!", 
+        parse_mode="Markdown"
+    )
+  else:
+    send_main_menu(message.chat.id, user_id, "👋 Пришли видеофайл или фото для обработки.")
+
 @bot.message_handler(content_types=["video", "document"])
 def handle_video_input(message):
   user_id = message.from_user.id
@@ -265,13 +344,7 @@ def handle_video_input(message):
 
   mode = USER_MODES.get(user_id, "uniq")
 
-  if mode == "circle":
-    USER_COUNTS[user_id] = 1
-    Thread(target=process_video_circle, args=(message,)).start()
-  elif mode == "audio":
-    USER_COUNTS[user_id] = 1
-    Thread(target=process_extract_audio, args=(message,)).start()
-  elif mode == "watermark":
+  if mode == "watermark":
     USER_COUNTS[user_id] = 1
     Thread(target=process_watermark, args=(message,)).start()
   else:
@@ -311,7 +384,6 @@ def process_photo_worker(message, count):
   user_id = message.from_user.id
   user_data = get_user_data(user_id)
   
-  # Списываем ровно 1 попытку за любую генерацию
   user_data["count"] += 1
   msg = bot.reply_to(message, f"📥 Создаю {count} уникальных копий фото...")
 
@@ -349,79 +421,15 @@ def process_photo_worker(message, count):
     print(f"Photo error: {e}")
     bot.edit_message_text(f"❌ Ошибка обработки фото: {e}", message.chat.id, msg.id)
 
-def process_video_circle(message):
-  user_id = message.from_user.id
-  user_data = get_user_data(user_id)
-  user_data["count"] += 1
-
-  msg = bot.reply_to(message, "🔵 Принято! Конвертирую видео в кружочек...")
-  rnd = random.randint(1000, 9999)
-  input_path = f"source_circle_{user_id}_{rnd}.mp4"
-  output_path = f"result_circle_{user_id}_{rnd}.mp4"
-
-  try:
-    file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
-    downloaded_file = bot.download_file(file_info.file_path)
-
-    with open(input_path, "wb") as f:
-      f.write(downloaded_file)
-
-    cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-vf", "crop=min(iw\\,ih):min(iw\\,ih),scale=512:512",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    with open(output_path, "rb") as vid:
-      bot.send_video_note(message.chat.id, vid, timeout=120)
-
-    if os.path.exists(input_path): os.remove(input_path)
-    if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.id)
-    
-    send_main_menu(message.chat.id, user_id, "✅ Видео успешно переведено в кружочек!")
-  except Exception as e:
-    print(f"Circle error: {e}")
-
-def process_extract_audio(message):
-  user_id = message.from_user.id
-  user_data = get_user_data(user_id)
-  user_data["count"] += 1
-
-  msg = bot.reply_to(message, "🎵 Принято! Извлекаю аудио...")
-  rnd = random.randint(1000, 9999)
-  input_path = f"source_audio_{user_id}_{rnd}.mp4"
-  output_path = f"result_audio_{user_id}_{rnd}.mp3"
-
-  try:
-    file_info = bot.get_file(message.video.file_id if message.video else message.document.file_id)
-    downloaded_file = bot.download_file(file_info.file_path)
-
-    with open(input_path, "wb") as f:
-      f.write(downloaded_file)
-
-    cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame", "-ab", "192k", output_path]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    with open(output_path, "rb") as aud:
-      bot.send_audio(message.chat.id, aud, caption="🎵 Аудиодорожка извлечена!", timeout=120)
-
-    if os.path.exists(input_path): os.remove(input_path)
-    if os.path.exists(output_path): os.remove(output_path)
-    bot.delete_message(message.chat.id, msg.id)
-    
-    send_main_menu(message.chat.id, user_id, "✅ Аудио успешно извлечено!")
-  except Exception as e:
-    print(f"Audio error: {e}")
-
 def process_watermark(message):
   user_id = message.from_user.id
   user_data = get_user_data(user_id)
   user_data["count"] += 1
 
-  msg = bot.reply_to(message, "💧 Принято! Добавляю водяной знак...")
+  custom_wm = USER_WATERMARKS.get(user_id, "@Naketrue_bot")
+  safe_wm = custom_wm.replace("'", "").replace(":", "\\:")
+
+  msg = bot.reply_to(message, f"💧 Принято! Добавляю водяной знак («{custom_wm}»)...")
   rnd = random.randint(1000, 9999)
   input_path = f"source_wm_{user_id}_{rnd}.mp4"
   output_path = f"result_wm_{user_id}_{rnd}.mp4"
@@ -433,12 +441,36 @@ def process_watermark(message):
     with open(input_path, "wb") as f:
       f.write(downloaded_file)
 
-    vf = "drawtext=text='@Naketrue_bot':fontcolor=white:fontsize=24:x=w-tw-15:y=15:box=1:boxcolor=black@0.5:boxborderw=5"
-    cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", output_path]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if not os.path.exists(font_path):
+      possible_fonts = [
+          "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+          "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+          "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
+      ]
+      for f in possible_fonts:
+        if os.path.exists(f):
+          font_path = f
+          break
+
+    if os.path.exists(font_path):
+      vf = f"drawtext=fontfile='{font_path}':text='{safe_wm}':fontcolor=white:fontsize=24:x=w-tw-15:y=15:box=1:boxcolor=black@0.5:boxborderw=5"
+    else:
+      vf = f"drawtext=text='{safe_wm}':fontcolor=white:fontsize=24:x=w-tw-15:y=15:box=1:boxcolor=black@0.5:boxborderw=5"
+
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-c:a", "copy", output_path
+    ]
+    
+    process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.returncode != 0:
+      print(f"FFmpeg watermark error: {process.stderr.decode('utf-8', errors='ignore')}")
 
     with open(output_path, "rb") as vid:
-      bot.send_video(message.chat.id, vid, caption="💧 Водяной знак добавлен!", timeout=120)
+      bot.send_video(message.chat.id, vid, caption=f"💧 Водяной знак «{custom_wm}» добавлен!", timeout=120)
 
     if os.path.exists(input_path): os.remove(input_path)
     if os.path.exists(output_path): os.remove(output_path)
@@ -446,13 +478,12 @@ def process_watermark(message):
     
     send_main_menu(message.chat.id, user_id, "✅ Водяной знак успешно наложен!")
   except Exception as e:
-    print(f"Watermark error: {e}")
+    print(f"Watermark general error: {e}")
 
 def process_video_uniq(message, count):
   user_id = message.from_user.id
   user_data = get_user_data(user_id)
   
-  # Списываем ровно 1 попытку независимо от выбранного количества копий
   user_data["count"] += 1
 
   preset_key = USER_PRESETS.get(user_id, "preset_medium")
@@ -507,12 +538,8 @@ def process_video_uniq(message, count):
     print(f"Video error: {e}")
     bot.edit_message_text(f"❌ Ошибка видео: {e}", message.chat.id, msg.id)
 
-@bot.message_handler(func=lambda message: True)
-def fallback_handler(message):
-  send_main_menu(message.chat.id, message.from_user.id, "👋 Пришли видеофайл или фото для обработки.")
-
 if __name__ == "__main__":
   t = Thread(target=run_web)
   t.start()
-  print("🤖 Бот успешно запущен!")
+  print("🤖 Бот с админ-панелью успешно запущен!")
   bot.infinity_polling(skip_pending=True)
