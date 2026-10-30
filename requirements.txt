@@ -2,5 +2,4 @@ pyTelegramBotAPI
 requests
 flask
 Pillow
-yt-dlp
- 
+https://github.com/yt-dlp/yt-dlp/archive/master.zip
