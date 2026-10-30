@@ -243,6 +243,7 @@ def download_url_worker(message, url, msg_id):
         'outtmpl': output_path,
         'format': 'mp4/best',
         'noplaylist': True,
+        'impersonate': 'chrome',  # Эмуляция браузера Chrome для обхода защиты TikTok
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
       ydl.download([url])
